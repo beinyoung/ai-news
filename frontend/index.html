@@ -1,0 +1,68 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Daily</title>
+  <link rel="stylesheet" href="/css/style.css?v=20260428b">
+</head>
+<body>
+<header class="header">
+  <div class="header-logo">AI Daily <span>你的 AI 信息流</span></div>
+  <div class="header-search"><input type="text" id="searchInput" placeholder="搜索新闻"></div>
+  <div class="header-actions">
+    <button class="btn-icon" id="themeToggle">🌙</button>
+    <a href="/digests" class="btn-icon">日报/周报</a>
+    <a href="/admin" class="btn-icon">后台</a>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-card">
+      <div class="sidebar-title">分类</div>
+      <div class="category-list" id="catList">
+        <button class="cat-btn active" data-cat="all">全部</button>
+        <button class="cat-btn" data-cat="research">研究</button>
+        <button class="cat-btn" data-cat="industry">产业</button>
+        <button class="cat-btn" data-cat="general">综合</button>
+      </div>
+    </div>
+    <div class="sidebar-card">
+      <div class="sidebar-title">日期</div>
+      <ul class="date-list" id="dateList"></ul>
+    </div>
+    <div class="sidebar-card">
+      <div class="sidebar-title">我的订阅标签</div>
+      <div id="subscribedTags" class="subscribed-tags-wrap">加载中...</div>
+    </div>
+    <div class="sidebar-card">
+      <div class="sidebar-title">趋势看板（7天）</div>
+      <div id="trendTopTags" style="font-size:.82rem;color:var(--text-muted)"></div>
+      <hr style="margin:8px 0;border:none;border-top:1px solid var(--border)">
+      <div id="trendTopSources" style="font-size:.82rem;color:var(--text-muted)"></div>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="toolbar">
+      <span class="result-info" id="resultInfo"></span>
+      <button class="btn-crawl" id="crawlBtn">立即抓取</button>
+    </div>
+    <div class="toolbar">
+      <button class="btn-icon" id="modeNews">新闻流</button>
+      <button class="btn-icon" id="modeEvents">事件聚合</button>
+      <button class="btn-icon" id="modeSubscribed">订阅主题</button>
+      <button class="btn-icon" id="filterSaved">仅收藏</button>
+      <button class="btn-icon" id="filterUnread">仅未读</button>
+      <button class="btn-icon" id="filterPersonal">个性分排序</button>
+    </div>
+    <div class="filter-bar" id="filterBar">
+      <div class="filter-tags" id="filterTags"></div>
+      <button class="btn-icon" id="clearFilters">清空筛选</button>
+    </div>
+    <div id="newsList"><div class="loading-wrap"><div class="spinner"></div></div></div>
+    <div class="pagination" id="pagination"></div>
+  </main>
+</div>
+<script src="/js/main.js?v=20260428d"></script>
+</body>
+</html>

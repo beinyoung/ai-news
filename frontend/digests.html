@@ -1,0 +1,30 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>日报与周报 - AI Daily</title>
+  <link rel="stylesheet" href="/css/style.css?v=20260428b">
+</head>
+<body>
+<header class="header">
+  <div class="header-logo">AI Daily <span>日报与周报</span></div>
+  <div class="header-actions"><a href="/" class="btn-icon">返回首页</a></div>
+</header>
+<div class="digest-page">
+  <div class="digest-page-header">
+    <div>
+      <h1 style="font-size:1.3rem;font-weight:800">AI 综述中心</h1>
+      <p style="color:var(--text-muted);font-size:.88rem">支持每日晨报模板和每周复盘模板</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary" id="dailyBtn" onclick="generateDigest()">生成今日日报</button>
+      <button class="btn btn-secondary" id="weeklyBtn" onclick="generateWeeklyDigest()">生成本周周报</button>
+    </div>
+  </div>
+  <div id="digestStatus" class="digest-status" style="display:none"></div>
+  <div id="digestList"></div>
+</div>
+<script src="/js/digests.js?v=20260428e"></script>
+</body>
+</html>
