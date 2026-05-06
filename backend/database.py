@@ -1,9 +1,9 @@
 import sqlite3
-import os
 import json
 from datetime import datetime
+from pathlib import Path
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "news.db")
+DB_PATH = str(Path(__file__).parent / "news.db")
 
 
 class Database:
@@ -69,8 +69,7 @@ class Database:
                 value      TEXT DEFAULT ''
             )
         """)
-        # Keep startup resilient for existing datasets that may already contain duplicate URLs.
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_source_url ON news(source_url)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_source_url ON news(source_url)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_category ON news(category)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_importance ON news(importance)")
@@ -205,7 +204,7 @@ class Database:
         return current
 
     def get_events(self, date=None, limit=50):
-        result = self.get_news(page=1, limit=200, date=date, sort="importance")
+        result = self.get_news(page=1, limit=limit * 2, date=date, sort="importance")
         buckets = {}
         for item in result["items"]:
             key = self._event_key(item)
@@ -274,16 +273,26 @@ class Database:
         words = [w.lower() for w in (item.get("title", "").replace("-", " ").split()) if len(w) > 3]
         return " ".join(words[:4]) or f"id-{item.get('id')}"
 
+    ALLOWED_NEWS_COLS = {"title", "summary", "detail", "opinion", "importance", "source_url", "source_name", "published_at", "category", "tags"}
+
+    def _update(self, table: str, data: dict, where_col: str, where_val, allowed_cols: set | None = None):
+        if not data:
+            return
+        if allowed_cols is not None:
+            data = {k: v for k, v in data.items() if k in allowed_cols}
+        if not data:
+            return
+        conn = self._conn()
+        sets = ", ".join(f"{k} = ?" for k in data)
+        conn.execute(f"UPDATE {table} SET {sets} WHERE {where_col} = ?", list(data.values()) + [where_val])
+        conn.commit()
+        conn.close()
+
     def update_news(self, news_id, data):
         if not data:
             return self.get_news_by_id(news_id)
-        conn = self._conn()
-        sets = ", ".join(f"{k} = ?" for k in data)
-        conn.execute(f"UPDATE news SET {sets} WHERE id = ?", list(data.values()) + [news_id])
-        conn.commit()
-        row = conn.execute("SELECT * FROM news WHERE id = ?", [news_id]).fetchone()
-        conn.close()
-        return dict(row) if row else None
+        self._update("news", data, "id", news_id, self.ALLOWED_NEWS_COLS)
+        return self.get_news_by_id(news_id)
 
     def delete_news(self, news_id):
         conn = self._conn()
@@ -324,7 +333,7 @@ class Database:
     def get_recent_titles(self, days: int = 7) -> list:
         conn = self._conn()
         rows = conn.execute(
-            "SELECT title FROM news WHERE created_at >= datetime('now', ?, 'localtime')",
+            "SELECT title FROM news WHERE created_at >= datetime('now', ?, 'localtime') ORDER BY created_at DESC LIMIT 1000",
             [f"-{days} days"],
         ).fetchall()
         conn.close()
@@ -342,11 +351,7 @@ class Database:
         return log_id
 
     def update_crawl_log(self, log_id: int, data: dict):
-        conn = self._conn()
-        sets = ", ".join(f"{k} = ?" for k in data)
-        conn.execute(f"UPDATE crawl_logs SET {sets} WHERE id = ?", list(data.values()) + [log_id])
-        conn.commit()
-        conn.close()
+        self._update("crawl_logs", data, "id", log_id)
 
     def get_crawl_logs(self, limit: int = 10) -> list:
         conn = self._conn()

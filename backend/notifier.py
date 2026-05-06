@@ -33,9 +33,11 @@ class Notifier:
     @staticmethod
     def _article_row(a: dict) -> str:
         imp = a.get("importance", 5)
+        source_url = a.get("source_url", "")
+        title = a.get("title", "")
         title_html = (
-            f'<a href="{a["source_url"]}" style="font-weight:bold;color:#1e293b;text-decoration:none">{a["title"]}</a>'
-            if a.get("source_url") else f'<span style="font-weight:bold">{a["title"]}</span>'
+            f'<a href="{source_url}" style="font-weight:bold;color:#1e293b;text-decoration:none">{title}</a>'
+            if source_url else f'<span style="font-weight:bold">{title}</span>'
         )
         return f"""<tr><td style="padding:12px 0;border-bottom:1px solid #e2e8f0">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">

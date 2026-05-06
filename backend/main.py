@@ -1,12 +1,13 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -20,11 +21,12 @@ from crawler import Crawler
 db = Database()
 crawler = Crawler(db)
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
-FRONTEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+FRONTEND = str(Path(__file__).parent.parent / "frontend")
 
 
 async def generate_yesterday_digest():
-    yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now().date()
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
     await crawler.generate_daily_digest(yesterday)
 
 
@@ -55,19 +57,6 @@ class NewsCreate(BaseModel):
     tags: str = ""
 
 
-class NewsUpdate(BaseModel):
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    detail: Optional[str] = None
-    opinion: Optional[str] = None
-    importance: Optional[int] = None
-    source_url: Optional[str] = None
-    source_name: Optional[str] = None
-    published_at: Optional[str] = None
-    category: Optional[str] = None
-    tags: Optional[str] = None
-
-
 class NewsStateUpdate(BaseModel):
     is_read: Optional[bool] = None
     is_saved: Optional[bool] = None
@@ -84,12 +73,18 @@ class SubscribedTagsUpdate(BaseModel):
     tags: list[str]
 
 
+def require_api_key():
+    if not crawler.api_key:
+        raise HTTPException(status_code=400, detail="未配置 DEEPSEEK_API_KEY，无法使用 AI 处理")
+
+
 def apply_personal_score(items: list[dict]) -> list[dict]:
     prefs = db.get_preferences()
     cat_w = prefs.get("category_weights", {})
     tag_w = prefs.get("tag_weights", {})
     saved_boost = int(prefs.get("saved_boost", 2) or 0)
     read_penalty = int(prefs.get("read_penalty", 1) or 0)
+    result = []
     for it in items:
         score = float(it.get("importance", 5))
         score += float(cat_w.get(it.get("category", ""), 0) or 0)
@@ -99,8 +94,8 @@ def apply_personal_score(items: list[dict]) -> list[dict]:
             score += saved_boost
         if it.get("is_read"):
             score -= read_penalty
-        it["personal_score"] = round(score, 2)
-    return sorted(items, key=lambda x: x.get("personal_score", 0), reverse=True)
+        result.append({**it, "personal_score": round(score, 2)})
+    return sorted(result, key=lambda x: x.get("personal_score", 0), reverse=True)
 
 
 @app.get("/api/news")
@@ -123,15 +118,14 @@ def list_news(
 
 @app.post("/api/news", status_code=201)
 def create_news(payload: NewsCreate):
-    data = payload.model_dump()
-    if not data["published_at"]:
-        data["published_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return db.create_news(data)
+    return db.create_news(payload.model_dump())
 
 
 @app.put("/api/news/{news_id}")
-def update_news(news_id: int, payload: NewsUpdate):
-    data = {k: v for k, v in payload.model_dump().items() if v is not None}
+def update_news(news_id: int, payload: NewsCreate):
+    data = payload.model_dump(exclude_unset=True)
+    if "title" in data and not data["title"]:
+        del data["title"]
     result = db.update_news(news_id, data)
     if not result:
         raise HTTPException(status_code=404, detail="Not found")
@@ -171,8 +165,7 @@ def list_subscribed_news(page: int = 1, limit: int = 20):
     tags = db.get_subscribed_tags()
     if not tags:
         return {"total": 0, "page": page, "limit": limit, "items": []}
-    items = db.get_news(page=1, limit=1000, sort="importance")["items"]
-    # Fuzzy match subscription terms against tags/title/summary/detail to handle wording variants.
+    items = db.get_news(page=1, limit=300, sort="importance")["items"]
     tag_norm = [str(t).strip().lower() for t in tags if str(t).strip()]
     matched = []
     for x in items:
@@ -204,8 +197,7 @@ def get_preferences():
 
 @app.put("/api/preferences")
 def set_preferences(payload: PreferencesUpdate):
-    data = {k: v for k, v in payload.model_dump().items() if v is not None}
-    return db.set_preferences(data)
+    return db.set_preferences(payload.model_dump(exclude_none=True))
 
 
 @app.get("/api/trends")
@@ -220,9 +212,7 @@ async def trigger_crawl():
 
 
 @app.post("/api/reprocess")
-async def reprocess_news():
-    if not crawler.api_key:
-        raise HTTPException(status_code=400, detail="未配置 DEEPSEEK_API_KEY，无法使用 AI 处理")
+async def reprocess_news(_=Depends(require_api_key)):
     count = await crawler.reprocess_pending()
     return {"message": f"已重新 AI 处理 {count} 条新闻", "count": count}
 
@@ -238,9 +228,7 @@ def list_digests(page: int = 1, limit: int = 10):
 
 
 @app.post("/api/digests/generate")
-async def generate_digest(for_date: Optional[str] = None):
-    if not crawler.api_key:
-        raise HTTPException(status_code=400, detail="未配置 DEEPSEEK_API_KEY，无法生成综述")
+async def generate_digest(for_date: Optional[str] = None, _=Depends(require_api_key)):
     if not for_date:
         for_date = datetime.now().strftime("%Y-%m-%d")
     result = await crawler.generate_daily_digest(for_date)
@@ -250,9 +238,7 @@ async def generate_digest(for_date: Optional[str] = None):
 
 
 @app.post("/api/digests/generate-weekly")
-async def generate_weekly_digest(end_date: Optional[str] = None):
-    if not crawler.api_key:
-        raise HTTPException(status_code=400, detail="未配置 DEEPSEEK_API_KEY，无法生成周报")
+async def generate_weekly_digest(end_date: Optional[str] = None, _=Depends(require_api_key)):
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
     result = await crawler.generate_weekly_digest(end_date)

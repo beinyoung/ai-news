@@ -10,7 +10,7 @@ import httpx
 
 from notifier import Notifier
 
-RSS_FEEDS = [
+RSS_FEEDS = (
     {"url": "https://openai.com/blog/rss.xml", "name": "OpenAI Blog", "category": "research"},
     {"url": "https://www.anthropic.com/rss.xml", "name": "Anthropic Blog", "category": "research"},
     {"url": "https://ai.meta.com/blog/rss/", "name": "Meta AI Blog", "category": "research"},
@@ -27,7 +27,7 @@ RSS_FEEDS = [
     {"url": "https://www.deeplearning.ai/the-batch/feed/", "name": "DeepLearning.AI", "category": "research"},
     {"url": "https://www.wired.com/feed/category/artificial-intelligence/latest/rss", "name": "Wired AI", "category": "general"},
     {"url": "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml", "name": "The Verge AI", "category": "industry"},
-]
+)
 
 AI_SUMMARY_PROMPT = """你是一位AI领域资深分析师。请对下面新闻进行分析，以JSON格式返回。所有字段请用中文输出。
 标题：{title}
@@ -47,10 +47,34 @@ AI_SUMMARY_PROMPT = """你是一位AI领域资深分析师。请对下面新闻�
 
 
 class Crawler:
+
+    TAG_MAP = {
+        "openai": "OpenAI", "anthropic": "Anthropic", "google": "Google",
+        "gemini": "Gemini", "llama": "Llama", "mistral": "Mistral",
+        "agent": "Agent", "benchmark": "评测", "safety": "安全",
+        "chip": "芯片", "gpu": "GPU", "video": "视频生成",
+        "image": "图像生成", "multimodal": "多模态",
+        "enterprise": "企业应用", "api": "API", "开源": "开源", "推理": "推理",
+    }
+
     def __init__(self, db):
         self.db = db
         self.api_key = os.getenv("DEEPSEEK_API_KEY", "")
         self.notifier = Notifier()
+
+    async def _call_deepseek(self, prompt: str, model: str = "deepseek-chat", max_tokens: int = 1024, timeout: int = 40) -> str | None:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    "https://api.deepseek.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
+                    json={"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
+                )
+                if resp.status_code == 200:
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[DeepSeek] API call failed: {e}")
+        return None
 
     async def crawl_all(self) -> int:
         log_id = self.db.create_crawl_log()
@@ -121,15 +145,14 @@ class Crawler:
     async def generate_daily_digest(self, date: str) -> dict | None:
         if not self.api_key:
             return None
-        result = self.db.get_news(page=1, limit=100, date=date)
+        result = self.db.get_news(page=1, limit=50, date=date, sort="importance")
         articles = result["items"]
         if len(articles) < 3:
             return None
 
-        articles_sorted = sorted(articles, key=lambda x: x.get("importance", 5), reverse=True)
         news_text = "\n".join(
             f"{i+1}. [{a['source_name']}] {a['title']}" + (f"\n   {a['summary'][:120]}" if a.get("summary") else "")
-            for i, a in enumerate(articles_sorted[:50])
+            for i, a in enumerate(articles)
         )
         prompt = f"""你是一位 AI 行业分析师。以下是 {date} 收录的 {len(articles)} 条 AI 资讯：
 {news_text}
@@ -142,31 +165,22 @@ class Crawler:
 
 输出中文正文，不要 markdown 标题。"""
 
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.deepseek.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
-                    json={"model": "deepseek-v4-pro", "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]},
-                )
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"].strip()
-                    return self.db.upsert_digest(date, content, len(articles))
-        except Exception as e:
-            print(f"[Digest] Generation failed: {e}")
+        content = await self._call_deepseek(prompt, model="deepseek-v4-pro", max_tokens=1024, timeout=60)
+        if content:
+            return self.db.upsert_digest(date, content, len(articles))
         return None
 
     async def generate_weekly_digest(self, end_date: str) -> dict | None:
         if not self.api_key:
             return None
-        result = self.db.get_news(page=1, limit=120, sort="importance")
+        result = self.db.get_news(page=1, limit=80, sort="importance")
         items = result["items"]
         if len(items) < 8:
             return None
 
         news_text = "\n".join(
             f"{i+1}. [{a['source_name']}] {a['title']} ({a.get('importance', 5)}/10)"
-            for i, a in enumerate(items[:80])
+            for i, a in enumerate(items)
         )
         prompt = f"""你是一位 AI 产业研究员。以下是近一周新闻：
 {news_text}
@@ -177,18 +191,9 @@ class Crawler:
 3. 下周观察清单（3条）
 要求：中文，400-700字。"""
 
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.deepseek.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
-                    json={"model": "deepseek-chat", "max_tokens": 1400, "messages": [{"role": "user", "content": prompt}]},
-                )
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"].strip()
-                    return self.db.upsert_digest(f"week-{end_date}", content, len(items))
-        except Exception as e:
-            print(f"[Digest] Weekly generation failed: {e}")
+        content = await self._call_deepseek(prompt, model="deepseek-chat", max_tokens=1400, timeout=60)
+        if content:
+            return self.db.upsert_digest(f"week-{end_date}", content, len(items))
         return None
 
     @staticmethod
@@ -212,54 +217,28 @@ class Crawler:
 
     async def _ai_process(self, title: str, raw: str, feed_info: dict) -> dict:
         prompt = AI_SUMMARY_PROMPT.format(title=title, source=feed_info["name"], content=raw[:2000])
-        try:
-            async with httpx.AsyncClient(timeout=40) as client:
-                resp = await client.post(
-                    "https://api.deepseek.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
-                    json={"model": "deepseek-chat", "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]},
-                )
-                if resp.status_code == 200:
-                    text = resp.json()["choices"][0]["message"]["content"]
-                    m = re.search(r"\{.*\}", text, re.DOTALL)
-                    if m:
-                        r = json.loads(m.group())
-                        return {
-                            "title": r.get("title_zh") or title,
-                            "summary": r.get("summary", ""),
-                            "detail": r.get("detail", ""),
-                            "opinion": r.get("opinion", ""),
-                            "importance": max(1, min(10, int(r.get("importance", 5)))),
-                            "tags": self._merge_tags(r.get("tags", ""), self._heuristic_tags(title, raw)),
-                        }
-        except Exception as e:
-            print(f"[AI] Process failed: {e}")
+        text = await self._call_deepseek(prompt)
+        if text:
+            m = re.search(r"\{.*\}", text, re.DOTALL)
+            if m:
+                try:
+                    r = json.loads(m.group())
+                    return {
+                        "title": r.get("title_zh") or title,
+                        "summary": r.get("summary", ""),
+                        "detail": r.get("detail", ""),
+                        "opinion": r.get("opinion", ""),
+                        "importance": max(1, min(10, int(r.get("importance", 5)))),
+                        "tags": self._merge_tags(r.get("tags", ""), self._heuristic_tags(title, raw)),
+                    }
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    pass
         return self._simple_process(title, raw)
 
-    @staticmethod
-    def _heuristic_tags(title: str, raw: str) -> list:
+    @classmethod
+    def _heuristic_tags(cls, title: str, raw: str) -> list:
         text = f"{title} {raw}".lower()
-        mapping = {
-            "openai": "OpenAI",
-            "anthropic": "Anthropic",
-            "google": "Google",
-            "gemini": "Gemini",
-            "llama": "Llama",
-            "mistral": "Mistral",
-            "agent": "Agent",
-            "benchmark": "评测",
-            "safety": "安全",
-            "chip": "芯片",
-            "gpu": "GPU",
-            "video": "视频生成",
-            "image": "图像生成",
-            "multimodal": "多模态",
-            "enterprise": "企业应用",
-            "api": "API",
-            "开源": "开源",
-            "推理": "推理",
-        }
-        tags = [v for k, v in mapping.items() if k in text]
+        tags = [v for k, v in cls.TAG_MAP.items() if k in text]
         return list(dict.fromkeys(tags))[:8]
 
     @staticmethod
